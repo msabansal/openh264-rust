@@ -6,6 +6,21 @@
 
 ## OpenH264 Rust API
 
+### Fork patch
+
+This fork's `main` is based on upstream release `v0.9.9`
+(`68f56e8443f1d619a9d96af79dd7f836442b6d76`). It carries one native
+screen-content encoder fix in `openh264-sys2/upstream/codec/encoder/core/src/encoder_ext.cpp`:
+zero-offset scroll detections do not enable whole-reference feature-search
+rehashing. Real scroll detections and the existing adaptive feature-search
+decision remain supported; no bitstream syntax or Rust API changes are made.
+
+Consumers patch only `openh264-sys2` through `[patch.crates-io]`, using this
+repository's URL and an exact commit revision. Cargo patches must also be
+declared in the application's root workspace, not just a dependency workspace.
+The native source is built by the existing crate build script; no extra
+download, cache mutation, or application-side vendoring is required.
+
 Idiomatic and low-level bindings for [OpenH264](https://github.com/cisco/openh264), converting between these two in Rust:
 
 ![sample_image](https://media.githubusercontent.com/media/ralfbiedert/openh264-rs/master/gfx/title3.jpg)

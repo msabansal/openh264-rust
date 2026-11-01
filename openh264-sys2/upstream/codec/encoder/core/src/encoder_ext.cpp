@@ -2736,9 +2736,13 @@ void PreprocessSliceCoding (sWelsEncCtx* pCtx) {
         //calculate bFMESwitchFlag
         SVAAFrameInfoExt* pVaaExt = static_cast<SVAAFrameInfoExt*> (pCtx->pVaa);
         const int32_t kiMbSize = pCurLayer->iMbHeight * pCurLayer->iMbWidth;
+        // ChromaForge: scroll detection reports a zero-offset match whenever the
+        // test lines are unchanged. Only a real scroll warrants hashing the whole
+        // reference frame for feature search.
         pFeatureSearchPreparation->bFMESwitchFlag = CalcFMESwitchFlag (pFeatureSearchPreparation->uiFMEGoodFrameCount,
             pFeatureSearchPreparation->iHighFreMbCount * 100 / kiMbSize, pCtx->pVaa->sVaaCalcInfo.iFrameSad / kiMbSize,
-            pVaaExt->sScrollDetectInfo.bScrollDetectFlag);
+            pVaaExt->sScrollDetectInfo.bScrollDetectFlag
+            && (pVaaExt->sScrollDetectInfo.iScrollMvX | pVaaExt->sScrollDetectInfo.iScrollMvY));
 
         //PerformFMEPreprocess
         SScreenBlockFeatureStorage* pScreenBlockFeatureStorage = pCurLayer->pRefPic->pScreenBlockFeatureStorage;
