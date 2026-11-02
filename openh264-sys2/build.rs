@@ -8,7 +8,9 @@ mod source_build {
     extern crate core;
 
     use cc::Build;
-    use std::path::Path;
+    use std::collections::BTreeSet;
+    use std::ffi::OsString;
+    use std::path::{Path, PathBuf};
     use walkdir::WalkDir;
 
     /// Finds all files with an extension, ignoring some.
@@ -210,35 +212,100 @@ mod source_build {
         }
     }
 
+    fn nasm_object_paths(component: &str, sources: &[String], out_dir: &Path) -> Result<Vec<PathBuf>, String> {
+        if !matches!(component, "common" | "processing" | "decoder" | "encoder") {
+            return Err(format!("Unknown NASM component: {component}"));
+        }
+
+        let mut names = BTreeSet::new();
+        let mut expected = Vec::with_capacity(sources.len());
+        for source in sources {
+            let filename = Path::new(source)
+                .file_name()
+                .ok_or_else(|| format!("Invalid NASM source path: {source}"))?;
+            let object_name = Path::new(filename).with_extension("o");
+            let name = object_name
+                .to_str()
+                .ok_or_else(|| format!("Invalid NASM object name for {source}"))?
+                .to_lowercase();
+            // Be conservative on every host so Windows cannot overwrite case-only duplicates.
+            if !names.insert(name) {
+                return Err(format!("NASM output-name collision in component {component}: {source}"));
+            }
+            expected.push(out_dir.join(object_name));
+        }
+        // Renaming must not overwrite another selected source's unprefixed object.
+        if names.iter().any(|name| names.contains(&format!("{component}-{name}"))) {
+            return Err(format!("NASM rename collision in component {component}"));
+        }
+        Ok(expected)
+    }
+
+    fn prepare_nasm_objects(component: &str, expected: &[PathBuf], returned: Vec<PathBuf>) -> Result<Vec<PathBuf>, String> {
+        let expected_set: BTreeSet<_> = expected.iter().collect();
+        let returned_set: BTreeSet<_> = returned.iter().collect();
+        if expected.len() != returned.len() || expected_set.len() != expected.len() || expected_set != returned_set {
+            return Err(format!(
+                "Incomplete, duplicate or unexpected NASM outputs for component {component}"
+            ));
+        }
+
+        // Validate the entire result before renaming or adding anything to cc.
+        let mut prepared = Vec::with_capacity(returned.len());
+        for object in &returned {
+            let metadata =
+                std::fs::metadata(object).map_err(|error| format!("Missing NASM object {}: {error}", object.display()))?;
+            if !metadata.is_file() || metadata.len() == 0 {
+                return Err(format!("Invalid NASM object: {}", object.display()));
+            }
+            let filename = object
+                .file_name()
+                .ok_or_else(|| format!("Invalid NASM object path: {}", object.display()))?;
+            let mut name = OsString::from(format!("{component}-"));
+            name.push(filename);
+            prepared.push(object.with_file_name(name));
+        }
+        for (object, renamed) in returned.iter().zip(&prepared) {
+            std::fs::rename(object, renamed).map_err(|error| {
+                format!(
+                    "Cannot rename NASM object {} to {}: {error}",
+                    object.display(),
+                    renamed.display()
+                )
+            })?;
+        }
+        Ok(prepared)
+    }
+
     #[allow(unused)]
-    fn try_compile_nasm(target: &Target, cc_build_command: &mut Build, root: &str) {
+    fn try_compile_nasm(target: &Target, cc_build_command: &mut Build, root: &str, component: &str) -> Result<(), String> {
         if std::env::var("OPENH264_NO_ASM").is_ok() {
             println!("NASM compilation disabled by environment variable.");
-            return;
+            return Ok(());
         }
 
         let Some(config) = NasmConfiguration::find(*target) else {
             println!("No NASM configuration found for target, not using any assembly.\nTarget: {target:?}");
-            return;
+            return Ok(());
         };
+
+        let sources = glob_import(root, &config.asm_extension, &config.asm_exclude);
+        let out_dir = PathBuf::from(std::env::var_os("OUT_DIR").ok_or("OUT_DIR must be set for NASM")?)
+            .join("nasm")
+            .join(component);
+        let expected = nasm_object_paths(component, &sources, &out_dir)?;
 
         // Try to compile NASM targets
         let mut nasm_build = nasm_rs::Build::new();
+        nasm_build.out_dir(&out_dir);
         let mut nasm_build = nasm_build.include(format!("upstream/codec/common/{}/", config.include_dir));
         nasm_build = nasm_build.define(&config.asm_platform_define, None);
         if config.prefix_symbols {
             nasm_build = nasm_build.define("PREFIX", None);
         }
 
-        // Run `nasm` and store result.
-        // TODO: is it a good idea to "silently" disable assembly if this fails?
-        let Ok(object_files) = nasm_build
-            .files(glob_import(root, &config.asm_extension, &config.asm_exclude))
-            .compile_objects()
-        else {
-            println!("Failed to compile NASM files, not using any assembly.");
-            return;
-        };
+        let object_files = nasm_build.files(&sources).compile_objects()?;
+        let object_files = prepare_nasm_objects(component, &expected, object_files)?;
 
         // This here only _EXTENDS_ the build command we got passed, it doesn't
         // _RUN_ any build command on its own (we still invoked `nasm` above
@@ -248,13 +315,16 @@ mod source_build {
         for object in &object_files {
             cc_build_command.object(object);
         }
+        Ok(())
     }
 
     /// Builds an OpenH264 sub-library and adds it to the project.
     fn compile_and_add_openh264_static_lib(target: &Target, name: &str, root: &str, suffix: &str, includes: &[&str]) {
         let mut cc_build = cc::Build::new();
 
-        try_compile_nasm(target, &mut cc_build, root);
+        if let Err(error) = try_compile_nasm(target, &mut cc_build, root, name) {
+            panic!("NASM failed for component {name}: {error}");
+        }
 
         cc_build
             .include("upstream/codec/api/wels/")
@@ -349,4 +419,7 @@ mod source_build {
             ],
         );
     }
+
+    #[cfg(test)]
+    include!("tests/nasm-caller/cases.rs");
 }

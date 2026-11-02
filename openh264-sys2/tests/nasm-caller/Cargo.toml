@@ -1,0 +1,20 @@
+[package]
+name = "openh264-nasm-caller-tests"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[workspace]
+
+[lib]
+path = "lib.rs"
+
+[features]
+default = ["source"]
+source = []
+parallel = ["nasm-rs/parallel"]
+
+[dependencies]
+cc = { version = "1.0", features = ["parallel"] }
+nasm-rs = "=0.3.2"
+walkdir = "2.3"
