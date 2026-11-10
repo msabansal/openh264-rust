@@ -4447,6 +4447,24 @@ int32_t WelsEncoderParamAdjust (sWelsEncCtx** ppCtx, SWelsSvcCodingParam* pNewPa
     pOldParam->iTargetBitrate   =
       pNewParam->iTargetBitrate;                    // overall target bitrate introduced in RC module
     pOldParam->iPaddingFlag     = pNewParam->iPaddingFlag;
+    if (pOldParam->iMinQp != pNewParam->iMinQp || pOldParam->iMaxQp != pNewParam->iMaxQp) {
+      pOldParam->iMinQp = pNewParam->iMinQp;
+      pOldParam->iMaxQp = pNewParam->iMaxQp;
+      if (pOldParam->iRCMode != RC_OFF_MODE) {
+        for (int32_t i = 0; i < pOldParam->iSpatialLayerNum; ++i) {
+          SWelsSvcRc* pRc = &(*ppCtx)->pWelsSvcRc[i];
+          pRc->iMinQp = pOldParam->iMinQp;
+          pRc->iMaxQp = pOldParam->iMaxQp;
+          pRc->iMinFrameQp = WELS_CLIP3 (pRc->iMinFrameQp, pRc->iMinQp, pRc->iMaxQp);
+          pRc->iMaxFrameQp = WELS_CLIP3 (pRc->iMaxFrameQp, pRc->iMinQp, pRc->iMaxQp);
+          for (int32_t tid = 0; tid <= pOldParam->sDependencyLayers[i].iHighestTemporalId; ++tid) {
+            SRCTemporal* pTemporal = &pRc->pTemporalOverRc[tid];
+            pTemporal->iMinQp = WELS_CLIP3 (pRc->iMinQp + (tid << 1), 0, QP_MAX_VALUE);
+            pTemporal->iMaxQp = WELS_CLIP3 (pRc->iMaxQp + (tid << 1), pTemporal->iMinQp, QP_MAX_VALUE);
+          }
+        }
+      }
+    }
 
     /* Layer definition */
     pOldParam->bPrefixNalAddingCtrl = pNewParam->bPrefixNalAddingCtrl;
