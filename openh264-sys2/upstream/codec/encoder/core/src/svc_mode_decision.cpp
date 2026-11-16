@@ -477,7 +477,11 @@ bool MdInterSCDPskipProcess (sWelsEncCtx* pEncCtx, SWelsMD* pWelsMd, SSlice* pSl
   bool bSkipFlag = pJudeSkip[eSkipMode] (pEncCtx, pCurMb, pMbCache, pWelsMd);
 
   if (bSkipFlag) {
-    bool bQpSimilarFlag = (kiRefMbQp - kiCurMbQp <= DELTA_QP_SCD_THD || kiRefMbQp <= 26);
+    // A lower explicit fixed QP requests refinement even below the usual
+    // screen-content skip threshold.
+    const bool bFixedQp = pEncCtx->pSvcParam->iMinQp == pEncCtx->pSvcParam->iMaxQp;
+    bool bQpSimilarFlag = bFixedQp ? kiRefMbQp <= kiCurMbQp
+                                  : (kiRefMbQp - kiCurMbQp <= DELTA_QP_SCD_THD || kiRefMbQp <= 26);
     SMVUnitXY sVaaPredSkipMv = {0, 0}, sCurMbMv[2] = {{0, 0}, {0, 0}};
     PredSkipMv (pMbCache, &sVaaPredSkipMv);
 
