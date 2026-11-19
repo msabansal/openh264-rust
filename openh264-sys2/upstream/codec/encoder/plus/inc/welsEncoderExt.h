@@ -96,7 +96,12 @@ class CWelsH264SVCEncoder : public ISVCEncoder {
   virtual int EXTAPI SetOption (ENCODER_OPTION opt_id, void* option);
   virtual int EXTAPI GetOption (ENCODER_OPTION opt_id, void* option);
 
+  // Reach per-picture hint for the next EncodeFrame; see reach_picture_hint.h.
+  // Non-virtual so the ISVCEncoder vtable ABI is unchanged.
+  int SetReachPictureHint (const SReachPictureHint* pHint);
+
  private:
+  void ClearReachPictureHint();
   int InitializeInternal (SWelsSvcCodingParam* argv);
   void TraceParamInfo(SEncParamExt *pParam);
   void LogStatistics (const int64_t kiCurrentFrameTs,int32_t iMaxDid);

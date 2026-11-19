@@ -1992,6 +1992,12 @@ void FreeMemorySvc (sWelsEncCtx** ppCtx) {
       pCtx->pMvdCostTable = NULL;
     }
 
+    if (NULL != pCtx->pReachStaticMb) {
+      pMa->WelsFree (pCtx->pReachStaticMb, "pReachStaticMb");
+      pCtx->pReachStaticMb = NULL;
+      pCtx->iReachStaticMbSize = 0;
+    }
+
     FreeCodingParam (&pCtx->pSvcParam, pMa);
     if (NULL != pCtx->pFuncList) {
       if (NULL != pCtx->pFuncList->pParametersetStrategy) {
@@ -2777,6 +2783,14 @@ void PreprocessSliceCoding (sWelsEncCtx* pCtx) {
     }
   }
 
+  // Reach recovery auxiliary (the first auxiliary after a main IDR): like the
+  // Windows AVC444v2 encoder, evaluate a 16x16 inter candidate (searched within
+  // REACH_RECOVERY_MV_RANGE, see WelsMdInterInit) and then the stock intra
+  // modes, but no sub-16x16 partitions.
+  if (ReachRecovery16x16Picture (pCtx)) {
+    pFuncList->pfInterFineMd = WelsMdInterFinePartitionNone;
+  }
+
   // update some layer dependent variable to save judgements in mb-level
   pCurLayer->bSatdInMdFlag = ((pFuncList->sSampleDealingFuncs.pfMeCost == pFuncList->sSampleDealingFuncs.pfSampleSatd)
                               && (pFuncList->sSampleDealingFuncs.pfMdCost == pFuncList->sSampleDealingFuncs.pfSampleSatd));
@@ -3443,6 +3457,42 @@ EVideoFrameType PrepareEncodeFrame (sWelsEncCtx* pCtx, SLayerBSInfo*& pLayerBsIn
   }
   return eFrameType;
 }
+
+/*!
+ * \brief   whether kpRef is the newest reference picture of the current hint role
+ */
+static bool ReachRefIsPreviousSameRole (const sWelsEncCtx* pCtx, const SPicture* kpRef) {
+  const int32_t kiRole = pCtx->sReachHint.iRole;
+  return kpRef != NULL && kiRole != REACH_ROLE_UNSPECIFIED && kpRef->bUsedAsRef
+         && kpRef->iReachRole == kiRole && kpRef->iReachSeq != 0
+         && kpRef->iReachSeq == pCtx->iReachLastRoleSeq[kiRole];
+}
+
+/*
+ * Static skip applies only when this P picture predicts from the previous
+ * picture of its role, the picture the caller's static map was built against.
+ */
+static void ReachPrepareStaticSkip (sWelsEncCtx* pCtx) {
+  pCtx->bReachStaticSkipActive = (pCtx->sReachHint.iFlags & REACH_HINT_STATIC_SKIP)
+                                 && pCtx->sReachHint.pStaticMb != NULL
+                                 && pCtx->eSliceType == P_SLICE && pCtx->iNumRef0 > 0
+                                 && pCtx->pCurDqLayer->pRefPic == pCtx->pRefPic
+                                 && ReachRefIsPreviousSameRole (pCtx, pCtx->pRefPic);
+}
+
+/*
+ * Record the hint role and an encoder-wide sequence number on the picture
+ * about to become a reference; an IDR forgets every earlier reference.
+ */
+static void ReachRecordReferenceRole (sWelsEncCtx* pCtx, const EVideoFrameType keFrameType) {
+  if (keFrameType == videoFrameTypeIDR)
+    memset (pCtx->iReachLastRoleSeq, 0, sizeof (pCtx->iReachLastRoleSeq));
+  pCtx->pDecPic->iReachRole = pCtx->sReachHint.iRole;
+  pCtx->pDecPic->iReachSeq  = ++ pCtx->iReachPictureSeq;
+  if (pCtx->sReachHint.iRole != REACH_ROLE_UNSPECIFIED)
+    pCtx->iReachLastRoleSeq[pCtx->sReachHint.iRole] = pCtx->pDecPic->iReachSeq;
+}
+
 /*!
  * \brief   core svc encoding process
  *
@@ -3636,6 +3686,8 @@ int32_t WelsEncoderEncodeExt (sWelsEncCtx* pCtx, SFrameBSInfo* pFbi, const SSour
     fsnr                        = pCtx->pDecPic;
     pCtx->pDecPic->iPictureType = pCtx->eSliceType;
     pCtx->pDecPic->iFramePoc    = pParamInternal->iPOC;
+    pCtx->pDecPic->iReachRole   = REACH_ROLE_UNSPECIFIED;
+    pCtx->pDecPic->iReachSeq    = 0;
 
     WelsInitCurrentLayer (pCtx, iCurWidth, iCurHeight);
 
@@ -3661,6 +3713,7 @@ int32_t WelsEncoderEncodeExt (sWelsEncCtx* pCtx, SFrameBSInfo* pFbi, const SSour
     WelsUpdateRefSyntax (pCtx,  pParamInternal->iPOC,
                          eFrameType); //get reordering syntax used for writing slice header and transmit to encoder.
     PrefetchReferencePicture (pCtx, eFrameType); // update reference picture for current pDq layer
+    ReachPrepareStaticSkip (pCtx);
     pCtx->pFuncList->pfRc.pfWelsRcPictureInit (pCtx, pFbi->uiTimeStamp);
     PreprocessSliceCoding (pCtx); // MUST be called after pfWelsRcPictureInit() and WelsInitCurrentLayer()
 
@@ -3900,10 +3953,15 @@ int32_t WelsEncoderEncodeExt (sWelsEncCtx* pCtx, SFrameBSInfo* pFbi, const SSour
     pCtx->pDecPic->iFrameAverageQp = pCtx->pWelsSvcRc[iCurDid].iAverageFrameQp;
 
     //update scc related
-    pCtx->pFuncList->pfUpdateFMESwitch (pCtx->pCurDqLayer);
+    // A Reach recovery auxiliary predicts packed chroma from an unrelated luma
+    // IDR and runs no 8x8 feature search, so it says nothing about FME
+    // usefulness for later pictures; leave the FME switch state alone.
+    if (!ReachRecovery16x16Picture (pCtx))
+      pCtx->pFuncList->pfUpdateFMESwitch (pCtx->pCurDqLayer);
 
     // reference picture list update
     if (eNalRefIdc != NRI_PRI_LOWEST) {
+      ReachRecordReferenceRole (pCtx, eFrameType);
       if (!pCtx->pReferenceStrategy->UpdateRefList()) {
         WelsLog (pLogCtx, WELS_LOG_WARNING, "WelsEncoderEncodeExt(), WelsUpdateRefList failed. ForceCodingIDR!");
         //the above is to set the next frame to be IDR

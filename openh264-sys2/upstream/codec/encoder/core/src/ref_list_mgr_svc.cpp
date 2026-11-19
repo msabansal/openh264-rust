@@ -739,6 +739,8 @@ static inline void UpdateOriginalPicInfo (SPicture* pOrigPic, SPicture* pReconPi
   pOrigPic->bIsLongRef = pReconPic->bIsLongRef;
   pOrigPic->bIsSceneLTR = pReconPic->bIsSceneLTR;
   pOrigPic->iFrameAverageQp = pReconPic->iFrameAverageQp;
+  pOrigPic->iReachRole = pReconPic->iReachRole;
+  pOrigPic->iReachSeq = pReconPic->iReachSeq;
 }
 
 static void UpdateSrcPicListLosslessScreenRefSelectionWithLtr (sWelsEncCtx* pCtx) {
@@ -925,6 +927,10 @@ void WelsMarkPicScreen (sWelsEncCtx* pCtx) {
 
   if (!pCtx->pSvcParam->bEnableLongTermReference) {
     pLtr->iCurLtrIdx = pCtx->uiTemporalId;
+  } else if (pCtx->eSliceType == P_SLICE && ReachRoleReferenceActive (pCtx)) {
+    // Overwrite this role's own slot; never a scene LTR, which would evict the other role.
+    pLtr->bLTRMarkingFlag = false;
+    pLtr->iCurLtrIdx = ReachRoleLtrSlot (pCtx->sReachHint.iRole);
   } else {
     if (iMaxActualLtrIdx != -1 && pCtx->uiTemporalId == 0 && pCtx->bCurFrameMarkedAsSceneLtr) {
       //Scene LTR

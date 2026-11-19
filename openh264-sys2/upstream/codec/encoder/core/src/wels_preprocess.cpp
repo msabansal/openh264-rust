@@ -989,6 +989,24 @@ void CWelsPreProcessScreen::GetAvailableRefListLosslessScreenRefSelection (SPict
   uint8_t uiRefTid = 0;
   bool bRefRealLtr = false;
 
+  if (ReachRoleReferenceActive (m_pEncCtx)) {
+    // Compare only with the latest picture of the same role, held in its dedicated slot.
+    // Without one (startup or after an IDR), fall back to the stock candidate list.
+    const int32_t kiRole = m_pEncCtx->sReachHint.iRole;
+    const int32_t kiSlot = ReachRoleLtrSlot (kiRole);
+    for (int32_t i = iSourcePicNum - 1; i >= 0; --i) {
+      pRefPic = pRefPicList[i];
+      if (NULL != pRefPic && pRefPic->bUsedAsRef && pRefPic->bIsLongRef && pRefPic->iReachRole == kiRole
+          && pRefPic->iLongTermPicNum == kiSlot && pRefPic->uiTemporalId <= iCurTid) {
+        pAvailableRefParam[0].pRefPicture = pRefPic;
+        pAvailableRefParam[0].iSrcListIdx = i + 1; //in SrcList, the idx 0 is reserved for CurPic
+        iAvailableRefNum = 1;
+        iAvailableSceneRefNum = pRefPic->bIsSceneLTR;
+        return;
+      }
+    }
+  }
+
   iAvailableRefNum = 1; //zero is left for the closest frame
   iAvailableSceneRefNum = 0;
 

@@ -71,6 +71,8 @@ int32_t WelsMdP4x8 (SWelsFuncPtrList* pFunc, SDqLayer* pCurDqLayer, SWelsMD* pWe
 /*static*/ void WelsMdInterFinePartitionVaa (sWelsEncCtx* pEnc, SWelsMD* pMd, SSlice* pSlice, SMB* pCurMb, int32_t bestCost);
 /*static*/ void WelsMdInterFinePartitionVaaOnScreen (sWelsEncCtx* pEnc, SWelsMD* pMd, SSlice* pSlice, SMB* pCurMb,
     int32_t bestCost);
+// Reach recovery auxiliary: keep the P16x16 decision, evaluate no sub-16x16 partitions.
+void WelsMdInterFinePartitionNone (sWelsEncCtx* pEnc, SWelsMD* pMd, SSlice* pSlice, SMB* pCurMb, int32_t bestCost);
 void WelsMdInterMbRefinement (sWelsEncCtx* pEncCtx, SWelsMD* pWelsMd, SMB* pCurMb, SMbCache* pMbCache);
 bool WelsMdFirstIntraMode (sWelsEncCtx* pEnc, SWelsMD* pMd, SMB* pCurMb, SMbCache* pMbCache);
 //bool svc_md_first_intra_mode_constrained(sWelsEncCtx* pEnc, SWelsMD* pMd, SMB* pCurMb, SMbCache *pMbCache);

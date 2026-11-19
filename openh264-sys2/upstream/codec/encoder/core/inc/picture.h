@@ -96,6 +96,8 @@ uint8_t    uiRecieveConfirmed;
 uint8_t    uiTemporalId;
 uint8_t    uiSpatialId;
 int32_t   iFrameAverageQp;
+int32_t   iReachRole;   // EReachPictureRole of the hint that coded this reference
+int64_t   iReachSeq;    // encoder-wide reference sequence number; 0 = none
 
 /*******************************for screen reference frames****************************/
 SScreenBlockFeatureStorage* pScreenBlockFeatureStorage;
@@ -113,6 +115,8 @@ SScreenBlockFeatureStorage* pScreenBlockFeatureStorage;
       uiRecieveConfirmed = RECIEVE_FAILED;
       iMarkFrameNum      = -1;
       bUsedAsRef         = false;
+      iReachRole         = 0;
+      iReachSeq          = 0;
 
       if (NULL != pScreenBlockFeatureStorage)
         pScreenBlockFeatureStorage->bRefBlockFeatureCalculated = false;

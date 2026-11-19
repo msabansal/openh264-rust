@@ -15,6 +15,29 @@ zero-offset scroll detections do not enable whole-reference feature-search
 rehashing. Real scroll detections and the existing adaptive feature-search
 decision remain supported; no bitstream syntax or Rust API changes are made.
 
+The encoder also exports `ReachSetPictureHint`
+(`openh264-sys2/upstream/codec/api/wels/reach_picture_hint.h`), which applies a
+packed-view role and opt-in policy flags to the next `EncodeFrame` only and
+records each reference picture's role and reference order. Without a hint, or
+with role-only hints, output is byte-identical to stock. The policies are:
+
+- `REACH_HINT_ROLE_REFERENCE` keeps one long-term slot per role on a
+  single-layer screen-content LTR encoder (main in slot 0, auxiliary in slot
+  1), compares scene changes only with that slot, and predicts each P picture
+  from the latest picture of its own role through standard long-term
+  reordering and MMCO marking. A role without an earlier picture (the first
+  auxiliary after an IDR) falls back to stock selection.
+- `REACH_HINT_RECOVERY_16X16` applies only to an auxiliary P picture hinted as
+  recovery (the first after a main IDR). It evaluates the 16x16 inter
+  candidate within one macroblock of motion and the stock intra modes, no
+  sub-16x16 partitions, and leaves the feature-search switch untouched.
+- `REACH_HINT_STATIC_SKIP` codes caller-marked unchanged macroblocks as P_Skip
+  or zero-vector P16x16 without search or residual, but only when the
+  reference is the previous picture of the same role and its macroblock is not
+  coarser than the current quantizer (refinement keeps the stock path).
+
+The export exists only in the source build.
+
 Consumers patch only `openh264-sys2` through `[patch.crates-io]`, using this
 repository's URL and an exact commit revision. Cargo patches must also be
 declared in the application's root workspace, not just a dependency workspace.

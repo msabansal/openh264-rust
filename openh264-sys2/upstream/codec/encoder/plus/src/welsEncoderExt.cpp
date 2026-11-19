@@ -375,15 +375,19 @@ int32_t CWelsH264SVCEncoder::Uninitialize() {
 int CWelsH264SVCEncoder::EncodeFrame (const SSourcePicture* kpSrcPic, SFrameBSInfo* pBsInfo) {
   if (! (kpSrcPic && m_bInitialFlag && pBsInfo)) {
     WelsLog (&m_pWelsTrace->m_sLogCtx, WELS_LOG_ERROR, "CWelsH264SVCEncoder::EncodeFrame(), cmInitParaError.");
+    ClearReachPictureHint();
     return cmInitParaError;
   }
   if (kpSrcPic->iColorFormat != videoFormatI420) {
     WelsLog (&m_pWelsTrace->m_sLogCtx, WELS_LOG_ERROR, "CWelsH264SVCEncoder::EncodeFrame(), wrong iColorFormat %d",
              kpSrcPic->iColorFormat);
+    ClearReachPictureHint();
     return cmInitParaError;
   }
 
   const int32_t kiEncoderReturn = EncodeFrameInternal (kpSrcPic, pBsInfo);
+  // A Reach picture hint applies to one EncodeFrame call only.
+  ClearReachPictureHint();
 
   if (kiEncoderReturn != cmResultSuccess) {
     WelsLog (&m_pWelsTrace->m_sLogCtx, WELS_LOG_ERROR, "CWelsH264SVCEncoder::EncodeFrame(), kiEncoderReturn %d",
@@ -502,6 +506,70 @@ int CWelsH264SVCEncoder::ForceIntraFrame (bool bIDR, int iLayerId) {
 
   return 0;
 }
+
+void CWelsH264SVCEncoder::ClearReachPictureHint() {
+  if (NULL != m_pEncContext) {
+    memset (&m_pEncContext->sReachHint, 0, sizeof (SReachPictureHint));
+    m_pEncContext->bReachStaticSkipActive = false;
+  }
+}
+
+int CWelsH264SVCEncoder::SetReachPictureHint (const SReachPictureHint* pHint) {
+  if (! (m_pEncContext && m_bInitialFlag)) {
+    return cmInitExpected;
+  }
+  ClearReachPictureHint();
+  if (NULL == pHint) {
+    return cmResultSuccess;
+  }
+
+  sWelsEncCtx* pCtx = m_pEncContext;
+  const SWelsSvcCodingParam* kpParam = pCtx->pSvcParam;
+  const int32_t kiKnownFlags = REACH_HINT_ROLE_REFERENCE | REACH_HINT_RECOVERY_16X16 | REACH_HINT_STATIC_SKIP;
+  const SSpatialLayerConfig* kpLayer = &kpParam->sSpatialLayers[kpParam->iSpatialLayerNum - 1];
+  const int32_t kiMbCount = ((kpLayer->iVideoWidth + 15) >> 4) * ((kpLayer->iVideoHeight + 15) >> 4);
+  if (pHint->iRole < REACH_ROLE_UNSPECIFIED || pHint->iRole > REACH_ROLE_AUXILIARY
+      || (pHint->bRecovery != 0 && pHint->bRecovery != 1)
+      || (pHint->iFlags & ~kiKnownFlags) != 0
+      || (NULL == pHint->pStaticMb ? pHint->iStaticMbCount != 0 : pHint->iStaticMbCount != kiMbCount)) {
+    WelsLog (&m_pWelsTrace->m_sLogCtx, WELS_LOG_ERROR,
+             "CWelsH264SVCEncoder::SetReachPictureHint(), invalid role %d, recovery %d, flags 0x%x or map size %d",
+             pHint->iRole, pHint->bRecovery, pHint->iFlags, pHint->iStaticMbCount);
+    return cmInitParaError;
+  }
+  // Same-role prediction keeps one long-term slot per role on one single-layer
+  // screen-content timeline.
+  if ((pHint->iFlags & REACH_HINT_ROLE_REFERENCE)
+      && (REACH_ROLE_UNSPECIFIED == pHint->iRole || kpParam->iUsageType != SCREEN_CONTENT_REAL_TIME
+          || !kpParam->bEnableLongTermReference || kpParam->iSpatialLayerNum != 1
+          || kpParam->iTemporalLayerNum != 1 || kpParam->iLTRRefNum < 2)) {
+    WelsLog (&m_pWelsTrace->m_sLogCtx, WELS_LOG_ERROR,
+             "CWelsH264SVCEncoder::SetReachPictureHint(), role reference requires a role and single-layer screen LTR");
+    return cmInitParaError;
+  }
+
+  pCtx->sReachHint = *pHint;
+  pCtx->sReachHint.pStaticMb = NULL;
+  if (NULL != pHint->pStaticMb) {
+    if (pCtx->iReachStaticMbSize != kiMbCount) {
+      if (NULL != pCtx->pReachStaticMb) {
+        pCtx->pMemAlign->WelsFree (pCtx->pReachStaticMb, "pReachStaticMb");
+        pCtx->pReachStaticMb = NULL;
+        pCtx->iReachStaticMbSize = 0;
+      }
+      pCtx->pReachStaticMb = static_cast<uint8_t*> (pCtx->pMemAlign->WelsMalloc (kiMbCount, "pReachStaticMb"));
+      if (NULL == pCtx->pReachStaticMb) {
+        ClearReachPictureHint();
+        return cmMallocMemeError;
+      }
+      pCtx->iReachStaticMbSize = kiMbCount;
+    }
+    memcpy (pCtx->pReachStaticMb, pHint->pStaticMb, kiMbCount);
+    pCtx->sReachHint.pStaticMb = pCtx->pReachStaticMb;
+  }
+  return cmResultSuccess;
+}
+
 void CWelsH264SVCEncoder::TraceParamInfo (SEncParamExt* pParam) {
   WelsLog (&m_pWelsTrace->m_sLogCtx, WELS_LOG_INFO,
            "iUsageType = %d,iPicWidth= %d;iPicHeight= %d;iTargetBitrate= %d;iMaxBitrate= %d;iRCMode= %d;iPaddingFlag= %d;iTemporalLayerNum= %d;iSpatialLayerNum= %d;fFrameRate= %.6ff;uiIntraPeriod= %d;"
@@ -1388,6 +1456,14 @@ void WelsDestroySVCEncoder (ISVCEncoder* pEncoder) {
     delete pSVCEncoder;
     pSVCEncoder = NULL;
   }
+}
+
+int ReachSetPictureHint (void* pSvcEncoder, const SReachPictureHint* pHint) {
+  if (NULL == pSvcEncoder) {
+    return cmInitParaError;
+  }
+  CWelsH264SVCEncoder* pEncoder = static_cast<CWelsH264SVCEncoder*> (static_cast<ISVCEncoder*> (pSvcEncoder));
+  return pEncoder->SetReachPictureHint (pHint);
 }
 
 OpenH264Version WelsGetCodecVersion() {

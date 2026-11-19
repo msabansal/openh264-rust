@@ -59,6 +59,7 @@
 #include "mt_defs.h" // for multiple threadin,
 #include "WelsThreadLib.h"
 #include "wels_task_management.h"
+#include "reach_picture_hint.h"
 
 namespace WelsEnc {
 
@@ -235,6 +236,41 @@ typedef struct TagWelsEncCtx {
 #endif
   int64_t            uiLastTimestamp;
   uint8_t*           pDynamicBsBuffer[MAX_THREADS_NUM];
+
+  // Reach picture hint for the next EncodeFrame only; all zero means stock.
+  // sReachHint.pStaticMb points into pReachStaticMb when a map is present.
+  SReachPictureHint  sReachHint;
+  uint8_t*           pReachStaticMb;
+  int32_t            iReachStaticMbSize;
+  bool               bReachStaticSkipActive;  // static map applies to the current pRefPic
+  int64_t            iReachPictureSeq;        // last assigned SPicture::iReachSeq
+  int64_t            iReachLastRoleSeq[3];    // newest reference per role; 0 = none
 } sWelsEncCtx/*, *PWelsEncCtx*/;
+
+/*
+ *  REACH_HINT_ROLE_REFERENCE: every P picture predicts from the latest picture
+ *  of its own role, which lives in that role's dedicated long-term slot.
+ */
+static inline bool ReachRoleReferenceActive (const sWelsEncCtx* pCtx) {
+  return (pCtx->sReachHint.iFlags & REACH_HINT_ROLE_REFERENCE) != 0
+         && pCtx->sReachHint.iRole != REACH_ROLE_UNSPECIFIED;
+}
+
+static inline int32_t ReachRoleLtrSlot (const int32_t kiRole) {
+  // An IDR always occupies long-term slot 0, so the main role keeps it.
+  return (kiRole == REACH_ROLE_MAIN) ? 0 : 1;
+}
+
+// Integer-pel motion range of a Reach recovery auxiliary picture (see
+// ReachRecovery16x16Picture). Its only reference is the main IDR, whose luma is
+// unrelated to the packed chroma, so long-range matches are coincidental.
+#define REACH_RECOVERY_MV_RANGE 16
+
+// The first auxiliary picture after a main IDR, with the Reach recovery 16x16
+// policy requested for it.
+static inline bool ReachRecovery16x16Picture (const sWelsEncCtx* pCtx) {
+  return P_SLICE == pCtx->eSliceType && (pCtx->sReachHint.iFlags & REACH_HINT_RECOVERY_16X16)
+         && pCtx->sReachHint.bRecovery && pCtx->sReachHint.iRole == REACH_ROLE_AUXILIARY;
+}
 }
 #endif//sWelsEncCtx_H__

@@ -367,6 +367,10 @@ EVideoFrameType DecideFrameType (sWelsEncCtx* pEncCtx, const int8_t kiSpatialNum
     } else {
       iFrameType = videoFrameTypeP;
     }
+    if (videoFrameTypeP == iFrameType && ReachRoleReferenceActive (pEncCtx)) {
+      // Each role keeps its own long-term slot; a scene LTR would evict the other role's reference.
+      pEncCtx->bCurFrameMarkedAsSceneLtr = false;
+    }
     if (videoFrameTypeP == iFrameType && bSkipFrameFlag) {
       iFrameType = videoFrameTypeSkip;
     } else if (videoFrameTypeIDR == iFrameType) {
